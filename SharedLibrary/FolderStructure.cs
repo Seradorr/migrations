@@ -91,6 +91,12 @@ namespace Migrations {
                     return "other/coe";
                 case SourceType.OUT:
                     return "out";
+                case SourceType.ELF:
+                    return "elf";
+                case SourceType.HW_EXPORT:
+                    return "hw_export";
+                case SourceType.VITIS:
+                    return "vitis";
                 default:
                     return "other";
             }
@@ -114,7 +120,10 @@ namespace Migrations {
                 AbsoluteDir(SourceType.IP),
                 AbsoluteDir(SourceType.RTL),
                 AbsoluteDir(SourceType.SIM),
-                AbsoluteDir(SourceType.OUT)
+                AbsoluteDir(SourceType.OUT),
+                AbsoluteDir(SourceType.ELF),
+                AbsoluteDir(SourceType.HW_EXPORT),
+                AbsoluteDir(SourceType.VITIS)
             };
         }
     }
