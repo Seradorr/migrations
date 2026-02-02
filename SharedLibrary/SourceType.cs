@@ -30,6 +30,12 @@ namespace Migrations {
         COE,
         /// <summary>Çıktı dosyası (.bit, .ltx)</summary>
         OUT,
+        /// <summary>Embedded ELF dosyası</summary>
+        ELF,
+        /// <summary>Hardware export dosyası (.xsa)</summary>
+        HW_EXPORT,
+        /// <summary>Vitis proje dosyaları</summary>
+        VITIS,
         /// <summary>Diğer dosyalar</summary>
         OTHER
     }

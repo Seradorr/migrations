@@ -355,6 +355,46 @@ namespace Migrations {
                 Log("Warning: " + warn);
             }
         }
+
+        /// <summary>
+        /// Dosya yolunu normalize eder (küçük harf, tek ayracı kullanır).
+        /// </summary>
+        /// <param name="path">Normalize edilecek yol</param>
+        /// <returns>Normalize edilmiş yol</returns>
+        protected string NormalizePath(string path) {
+            if (string.IsNullOrEmpty(path)) return path;
+            // Tüm / karakterlerini \\ ile değiştir, küçük harfe çevir, sondaki \\ kaldır
+            return path.Replace('/', '\\').ToLowerInvariant().TrimEnd('\\');
+        }
+
+        /// <summary>
+        /// İki dosya yolunun eşit olup olmadığını kontrol eder (case-insensitive).
+        /// </summary>
+        /// <param name="path1">Birinci yol</param>
+        /// <param name="path2">İkinci yol</param>
+        /// <returns>Yollar eşitse true</returns>
+        protected bool PathsEqual(string path1, string path2) {
+            if (path1 == null || path2 == null) return path1 == path2;
+            return NormalizePath(path1).Equals(NormalizePath(path2), StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Bir yolun başka bir yolun alt dizini olup olmadığını kontrol eder.
+        /// </summary>
+        /// <param name="potentialChild">Potansiyel alt dizin yolu</param>
+        /// <param name="potentialParent">Potansiyel üst dizin yolu</param>
+        /// <returns>potentialChild, potentialParent'in altındaysa true</returns>
+        protected bool IsSubPath(string potentialChild, string potentialParent) {
+            if (string.IsNullOrEmpty(potentialChild) || string.IsNullOrEmpty(potentialParent))
+                return false;
+
+            string normalizedChild = NormalizePath(potentialChild);
+            string normalizedParent = NormalizePath(potentialParent);
+
+            // Alt path olması için parent ile başlamalı ve ardından \\ gelmeli
+            return normalizedChild.StartsWith(normalizedParent + "\\", StringComparison.OrdinalIgnoreCase) ||
+                   normalizedChild.Equals(normalizedParent, StringComparison.OrdinalIgnoreCase);
+        }
     }
 }
 
