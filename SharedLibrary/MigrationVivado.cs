@@ -33,6 +33,7 @@ namespace Migrations {
 #endif
 
             try {
+                Log("Step 1/10: ParseXPR...\n");
                 ParseXPR();
                 if (doDump) sourcesDump += dumpSources("ParseXPR");
             }
@@ -42,6 +43,7 @@ namespace Migrations {
             }
 
             try {
+                Log("Step 2/10: RemoveRefXcis...\n");
                 RemoveRefXcis();
                 if (doDump) sourcesDump += dumpSources("RemoveRefXcis");
             }
@@ -50,6 +52,7 @@ namespace Migrations {
             }
 
             try {
+                Log("Step 3/10: CreateSurrogates...\n");
                 CreateSurrogates();
                 if (doDump) sourcesDump += dumpSources("CreateSurrogates");
             }
@@ -58,6 +61,7 @@ namespace Migrations {
             }
 
             try {
+                Log("Step 4/10: FindIpsFromBds...\n");
                 FindIpsFromBds();
                 if (doDump) sourcesDump += dumpSources("FindIpsFromBds");
             }
@@ -66,6 +70,7 @@ namespace Migrations {
             }
 
             try {
+                Log("Step 5/10: FindCoesForIps...\n");
                 FindCoesForIps();
                 if (doDump) sourcesDump += dumpSources("FindCoesForIps");
             }
@@ -74,6 +79,7 @@ namespace Migrations {
             }
 
             try {
+                Log("Step 6/10: ResolveCopyOrder...\n");
                 ResolveCopyOrder();
                 if (doDump) sourcesDump += dumpSources("ResolveCopyOrder");
             }
@@ -81,10 +87,12 @@ namespace Migrations {
                 Log("Warning - ResolveCopyOrder failed: " + ex.Message);
             }
 
+            Log("Step 7/10: ResolveMatchingNames...\n");
             if ((returnVal = ResolveMatchingNames()) != 0) return returnVal;
             if (doDump) sourcesDump += dumpSources("ResolveMatchingNames");
 
             try {
+                Log("Step 8/10: DoMigration (" + sources.Count + " files)...\n");
                 DoMigration();
                 if (doDump) sourcesDump += dumpSources("DoMigration");
             }
@@ -93,6 +101,7 @@ namespace Migrations {
             }
 
             try {
+                Log("Step 9/10: WalkDags...\n");
                 WalkDags();
                 if (doDump) sourcesDump += dumpSources("WalkDags");
             }
@@ -100,6 +109,7 @@ namespace Migrations {
                 Log("Warning - WalkDags failed: " + ex.Message);
             }
 
+            Log("Step 10/10: Finalizing...\n");
             SaveProjectDoc();
 
             CopyBitFile();
@@ -598,6 +608,14 @@ namespace Migrations {
                     if (dag.isLost) {
                         continue;
                     }
+                    if (pDag.isLost) {
+                        continue;
+                    }
+
+                    // Aynı dosyanın kendisini beklemesini engelle (self-dependency)
+                    if (ReferenceEquals(dag, pDag) || PathsEqual(dag.copiedFA, pDag.copiedFA)) {
+                        continue;
+                    }
 
                     if (IsSubPath(dag.copiedFA, pDag.copiedFA)) {
                         pDag.dagsToWaitCopied.Add(dag);
@@ -652,8 +670,24 @@ namespace Migrations {
 
         private void DoMigration() {
             int i = 0;
+            int totalToCopy = sources.Count(dag => !dag.wasCopied && dag.isCopied && !dag.isLost);
+            int copiedCount = 0;
+            int maxIterations = sources.Count * sources.Count + 1000; // Sonsuz döngü koruması
+            int iterations = 0;
+
+            Log("  Starting copy of " + totalToCopy + " files...\n");
 
             while (sources.Any(delegate (VDag dag) {return !dag.wasCopied && dag.isCopied && !dag.isLost;})) {
+                iterations++;
+                if (iterations > maxIterations) {
+                    Log("ERROR - DoMigration appears stuck, breaking loop after " + iterations + " iterations\n");
+                    // Hangi dosyalar kopyalanamadı?
+                    foreach (VDag stuck in sources.Where(d => !d.wasCopied && d.isCopied && !d.isLost)) {
+                        Log("  Stuck file: " + stuck.name + " waiting for " + stuck.dagsToWaitCopied.Count(w => !w.wasCopied && w.isCopied) + " dependencies\n");
+                    }
+                    break;
+                }
+
                 VDag dag = sources[i];
                 i = (i + 1) % sources.Count;
 
@@ -665,14 +699,25 @@ namespace Migrations {
                     continue;
                 }
 
+                copiedCount++;
+                Log("  [" + copiedCount + "/" + totalToCopy + "] Copying: " + dag.name + "\n");
                 MigrateDag(dag);
             }
+
+            Log("  Copy complete: " + copiedCount + " files\n");
         }
 
         private void MigrateDag(VDag dag) {
+            // MAX_PATH kontrolü (Windows limiti 260 karakter)
+            if (dag.targetLocation.Length >= 260) {
+                Log("Warning - Target path exceeds MAX_PATH (260 chars): " + dag.targetLocation);
+                Log("Warning - Path length: " + dag.targetLocation.Length + " characters");
+            }
+
             try {
                 if (dag.isSurrogate) {
-                    Unzip(dag.actual.sourceFA, Directory.GetParent(dag.targetLocation).FullName, @"cc\.xml$");
+                    // XCIX'den sadece XCI dosyasını çıkar - diğer artifactleri atla
+                    UnzipXciOnly(dag.actual.sourceFA, Directory.GetParent(dag.targetLocation).FullName, dag.name);
                 }
 
                 else if (dag.isRepresentingItsFolder) {
@@ -940,6 +985,11 @@ namespace Migrations {
             foreach (VDag dag in sources.Where(delegate (VDag dag) {
                 return dag.type == SourceType.IP && !dag.isLost;
             })) {
+                if (!File.Exists(dag.targetFA)) {
+                    Log("Warning - IP file not found for update: " + dag.targetFA);
+                    continue;
+                }
+
                 XmlDocument xciDoc;
                 xciDoc = new XmlDocument();
                 xciDoc.PreserveWhitespace = true;
@@ -955,6 +1005,9 @@ namespace Migrations {
                     XmlNode parentNode = node.ParentNode;
                     parentNode.RemoveChild(node);
                     Log("Removed core container configuration from ip: " + dag.name);
+                    using (XmlWriter writer = XmlWriter.Create(dag.targetFA)) {
+                        xciDoc.WriteTo(writer);
+                    }
                 }
             }
 
@@ -965,6 +1018,11 @@ namespace Migrations {
                 foreach (VDag cDag in dag.affector.Where(delegate (VDag cDag) {
                     return cDag.type == SourceType.COE;// && !cDag.isLost; // Update relative location even if coe is lost
                 })) {
+                    if (!File.Exists(dag.targetFA)) {
+                        Log("Warning - IP file not found for COE update: " + dag.targetFA);
+                        continue;
+                    }
+
                     XmlDocument xciDoc;
                     xciDoc = new XmlDocument();
                     xciDoc.PreserveWhitespace = true;
@@ -1136,7 +1194,22 @@ namespace Migrations {
             relative = Regex.Replace(relative, "\\$PRUNDIR", projectName + ".runs", RegexOptions.IgnoreCase);
 
             if (!hasMacro && Path.IsPathRooted(relative)) {
-                return NormalizePath(relative);
+                // Mutlak yol var - dosya mevcut mu kontrol et
+                string normalized = NormalizePath(relative);
+                if (File.Exists(normalized) || Directory.Exists(normalized)) {
+                    return normalized;
+                }
+
+                // Dosya bulunamadı - XPR'deki eski mutlak yoldan göreceli yol çıkarmaya çalış
+                // Örnek: C:/Users/eski/Desktop/proje/RX270_KUTU.srcs/sources_1/bd/design_1.bd
+                // -> RX270_KUTU.srcs/sources_1/bd/design_1.bd -> projectFileDir + RX270_KUTU.srcs/...
+                string resolvedPath = TryResolveAbsolutePath(normalized);
+                if (resolvedPath != null) {
+                    return resolvedPath;
+                }
+
+                // Çözülemedi - orijinal yolu döndür (lost olarak işaretlenecek)
+                return normalized;
             }
 
             string baseDir = string.IsNullOrEmpty(relativeToDir) ? projectFileDir : relativeToDir;
@@ -1146,6 +1219,65 @@ namespace Migrations {
             }
 
             return NormalizePath(traversed);
+        }
+
+        /// <summary>
+        /// Eski mutlak yolları proje klasörüne göre çözümlemeye çalışır.
+        /// Örnek: C:/eski/proje/RX270_KUTU.srcs/bd/design.bd -> C:/yeni/proje/RX270_KUTU.srcs/bd/design.bd
+        /// </summary>
+        private string TryResolveAbsolutePath(string absolutePath) {
+            // Bilinen proje alt klasör kalıplarını ara
+            string[] knownPatterns = new string[] {
+                projectName + ".srcs",
+                projectName + ".ip_user_files",
+                projectName + ".runs",
+                projectName + ".gen",
+                projectName + ".sim",
+                projectName + ".cache"
+            };
+
+            foreach (string pattern in knownPatterns) {
+                int idx = absolutePath.IndexOf(pattern, StringComparison.OrdinalIgnoreCase);
+                if (idx > 0) {
+                    // Kalıptan sonraki kısmı al
+                    string relativePart = absolutePath.Substring(idx);
+                    string candidatePath = Path.Combine(projectFileDir, relativePart);
+                    candidatePath = NormalizePath(candidatePath);
+
+                    if (File.Exists(candidatePath) || Directory.Exists(candidatePath)) {
+                        Log("Resolved stale absolute path: " + absolutePath + " -> " + candidatePath);
+                        return candidatePath;
+                    }
+                }
+            }
+
+            // .srcs, .runs gibi genel kalıpları da dene (farklı proje adı olabilir)
+            string[] genericPatterns = new string[] { ".srcs", ".ip_user_files", ".runs", ".gen", ".sim", ".cache" };
+            foreach (string suffix in genericPatterns) {
+                // projectName.srcs gibi bir pattern bul
+                int suffixIdx = absolutePath.IndexOf(suffix, StringComparison.OrdinalIgnoreCase);
+                if (suffixIdx > 0) {
+                    // suffix'ten önceki klasör adını bul
+                    int slashIdx = absolutePath.LastIndexOf('\\', suffixIdx);
+                    if (slashIdx < 0) slashIdx = absolutePath.LastIndexOf('/', suffixIdx);
+                    if (slashIdx >= 0) {
+                        string folderName = absolutePath.Substring(slashIdx + 1, suffixIdx - slashIdx - 1);
+                        // Bu klasör adı proje adıyla eşleşiyor mu?
+                        if (folderName.Equals(projectName, StringComparison.OrdinalIgnoreCase)) {
+                            string relativePart = absolutePath.Substring(slashIdx + 1);
+                            string candidatePath = Path.Combine(projectFileDir, relativePart);
+                            candidatePath = NormalizePath(candidatePath);
+
+                            if (File.Exists(candidatePath) || Directory.Exists(candidatePath)) {
+                                Log("Resolved stale absolute path (generic): " + absolutePath + " -> " + candidatePath);
+                                return candidatePath;
+                            }
+                        }
+                    }
+                }
+            }
+
+            return null;
         }
 
         private string ConvertPathMSWtoXPR(string path, bool relativeToNewDir = false) {

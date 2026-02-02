@@ -237,6 +237,78 @@ namespace Migrations {
         }
 
         /// <summary>
+        /// XCIX arşivinden sadece XCI dosyasını ve COE/MEM dosyalarını çıkarır.
+        /// Synth, sim gibi Vivado tarafından üretilen artifactleri atlar.
+        /// </summary>
+        /// <param name="xcixFileFA">XCIX dosyasının yolu</param>
+        /// <param name="destDir">Hedef dizin</param>
+        /// <param name="xciFileName">Çıkarılacak XCI dosyasının adı</param>
+        protected void UnzipXciOnly(string xcixFileFA, string destDir, string xciFileName) {
+            using (ZipStorer zip = ZipStorer.Open(xcixFileFA, FileAccess.Read)) {
+                List<ZipStorer.ZipFileEntry> dir = zip.ReadCentralDir();
+
+                // Sadece şu uzantıları çıkar: .xci, .coe, .mem
+                string[] allowedExtensions = new string[] { ".xci", ".coe", ".mem" };
+                
+                // Hariç tutulacak klasörler
+                string[] excludeDirs = new string[] { "sim", "synth", "sim_netlist" };
+
+                foreach (ZipStorer.ZipFileEntry zipEntry in dir) {
+                    string relativeFilePath = zipEntry.FilenameInZip.Replace('/', '\\');
+                    string fileName = Path.GetFileName(relativeFilePath);
+                    string ext = Path.GetExtension(fileName).ToLowerInvariant();
+
+                    // cc.xml'i atla
+                    if (fileName.Equals("cc.xml", StringComparison.OrdinalIgnoreCase)) {
+                        continue;
+                    }
+
+                    // Hariç tutulan klasörleri atla
+                    bool skipDir = false;
+                    foreach (string excludeDir in excludeDirs) {
+                        if (relativeFilePath.IndexOf("\\" + excludeDir + "\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            relativeFilePath.StartsWith(excludeDir + "\\", StringComparison.OrdinalIgnoreCase)) {
+                            skipDir = true;
+                            break;
+                        }
+                    }
+                    if (skipDir) continue;
+
+                    // Sadece izin verilen uzantıları çıkar
+                    bool allowed = false;
+                    foreach (string allowedExt in allowedExtensions) {
+                        if (ext.Equals(allowedExt, StringComparison.OrdinalIgnoreCase)) {
+                            allowed = true;
+                            break;
+                        }
+                    }
+
+                    if (!allowed) continue;
+
+                    // Dosyayı çıkar
+                    int lastSep = relativeFilePath.LastIndexOf('\\');
+                    string relativeDirPath = lastSep > 0 ? relativeFilePath.Substring(0, lastSep) : "";
+                    byte[] output;
+                    zip.ExtractFile(zipEntry, out output);
+
+                    if (!string.IsNullOrEmpty(relativeDirPath)) {
+                        Directory.CreateDirectory(destDir + '\\' + relativeDirPath);
+                    }
+                    
+                    string targetPath = destDir + '\\' + relativeFilePath;
+                    
+                    // MAX_PATH kontrolü
+                    if (targetPath.Length >= 260) {
+                        Log("Warning - Skipping file due to MAX_PATH: " + targetPath);
+                        continue;
+                    }
+                    
+                    File.WriteAllBytes(targetPath, output);
+                }
+            }
+        }
+
+        /// <summary>
         /// Dosya yolundan dosya adını uzantısıyla birlikte döndürür.
         /// </summary>
         /// <param name="fileFA">Dosya yolu</param>
@@ -363,7 +435,6 @@ namespace Migrations {
         /// <returns>Normalize edilmiş yol</returns>
         protected string NormalizePath(string path) {
             if (string.IsNullOrEmpty(path)) return path;
-            // Tüm / karakterlerini \\ ile değiştir, küçük harfe çevir, sondaki \\ kaldır
             return path.Replace('/', '\\').ToLowerInvariant().TrimEnd('\\');
         }
 
@@ -391,7 +462,6 @@ namespace Migrations {
             string normalizedChild = NormalizePath(potentialChild);
             string normalizedParent = NormalizePath(potentialParent);
 
-            // Alt path olması için parent ile başlamalı ve ardından \\ gelmeli
             return normalizedChild.StartsWith(normalizedParent + "\\", StringComparison.OrdinalIgnoreCase) ||
                    normalizedChild.Equals(normalizedParent, StringComparison.OrdinalIgnoreCase);
         }

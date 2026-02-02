@@ -123,7 +123,8 @@ namespace Migrations {
                 AbsoluteDir(SourceType.OUT),
                 AbsoluteDir(SourceType.ELF),
                 AbsoluteDir(SourceType.HW_EXPORT),
-                AbsoluteDir(SourceType.VITIS)
+                AbsoluteDir(SourceType.VITIS),
+                rootDir + "\\docs"
             };
         }
     }

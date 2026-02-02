@@ -29,6 +29,8 @@
             this.textBoxLog = new System.Windows.Forms.TextBox();
             this.label1 = new System.Windows.Forms.Label();
             this.label2 = new System.Windows.Forms.Label();
+            this.buttonBrowseXpr = new System.Windows.Forms.Button();
+            this.buttonBrowseTarget = new System.Windows.Forms.Button();
             this.SuspendLayout();
             // 
             // buttonMigrate
@@ -36,7 +38,7 @@
             this.buttonMigrate.Location = new System.Drawing.Point(12, 76);
             this.buttonMigrate.Name = "buttonMigrate";
             this.buttonMigrate.Size = new System.Drawing.Size(75, 23);
-            this.buttonMigrate.TabIndex = 2;
+            this.buttonMigrate.TabIndex = 4;
             this.buttonMigrate.Text = "Migrate";
             this.buttonMigrate.UseVisualStyleBackColor = true;
             this.buttonMigrate.Click += new System.EventHandler(this.buttonMigrate_Click);
@@ -45,7 +47,7 @@
             // 
             this.textBoxXprFile.Location = new System.Drawing.Point(100, 13);
             this.textBoxXprFile.Name = "textBoxXprFile";
-            this.textBoxXprFile.Size = new System.Drawing.Size(304, 20);
+            this.textBoxXprFile.Size = new System.Drawing.Size(269, 20);
             this.textBoxXprFile.TabIndex = 0;
             this.textBoxXprFile.Tag = "XprFile";
             // 
@@ -54,9 +56,29 @@
             this.textBoxTargetDir.AcceptsTab = true;
             this.textBoxTargetDir.Location = new System.Drawing.Point(100, 40);
             this.textBoxTargetDir.Name = "textBoxTargetDir";
-            this.textBoxTargetDir.Size = new System.Drawing.Size(304, 20);
-            this.textBoxTargetDir.TabIndex = 1;
+            this.textBoxTargetDir.Size = new System.Drawing.Size(269, 20);
+            this.textBoxTargetDir.TabIndex = 2;
             this.textBoxTargetDir.Tag = "TargetDir";
+            // 
+            // buttonBrowseXpr
+            // 
+            this.buttonBrowseXpr.Location = new System.Drawing.Point(375, 11);
+            this.buttonBrowseXpr.Name = "buttonBrowseXpr";
+            this.buttonBrowseXpr.Size = new System.Drawing.Size(29, 23);
+            this.buttonBrowseXpr.TabIndex = 1;
+            this.buttonBrowseXpr.Text = "...";
+            this.buttonBrowseXpr.UseVisualStyleBackColor = true;
+            this.buttonBrowseXpr.Click += new System.EventHandler(this.buttonBrowseXpr_Click);
+            // 
+            // buttonBrowseTarget
+            // 
+            this.buttonBrowseTarget.Location = new System.Drawing.Point(375, 38);
+            this.buttonBrowseTarget.Name = "buttonBrowseTarget";
+            this.buttonBrowseTarget.Size = new System.Drawing.Size(29, 23);
+            this.buttonBrowseTarget.TabIndex = 3;
+            this.buttonBrowseTarget.Text = "...";
+            this.buttonBrowseTarget.UseVisualStyleBackColor = true;
+            this.buttonBrowseTarget.Click += new System.EventHandler(this.buttonBrowseTarget_Click);
             // 
             // textBoxLog
             // 
@@ -91,6 +113,8 @@
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(416, 386);
+            this.Controls.Add(this.buttonBrowseTarget);
+            this.Controls.Add(this.buttonBrowseXpr);
             this.Controls.Add(this.label2);
             this.Controls.Add(this.label1);
             this.Controls.Add(this.textBoxLog);
@@ -108,6 +132,8 @@
         #endregion
 
         private System.Windows.Forms.Button buttonMigrate;
+        private System.Windows.Forms.Button buttonBrowseXpr;
+        private System.Windows.Forms.Button buttonBrowseTarget;
         private System.Windows.Forms.TextBox textBoxXprFile;
         private System.Windows.Forms.TextBox textBoxTargetDir;
         private System.Windows.Forms.TextBox textBoxLog;
