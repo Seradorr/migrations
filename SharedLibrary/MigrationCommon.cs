@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -247,8 +247,9 @@ namespace Migrations {
             using (ZipStorer zip = ZipStorer.Open(xcixFileFA, FileAccess.Read)) {
                 List<ZipStorer.ZipFileEntry> dir = zip.ReadCentralDir();
 
-                // Sadece şu uzantıları çıkar: .xci, .coe, .mem
-                string[] allowedExtensions = new string[] { ".xci", ".coe", ".mem" };
+                // Sadece şu uzantıları çıkar: .xci, .xit, .xml, .coe, .mem
+                // XML dosyaları IP configuration için kritik
+                string[] allowedExtensions = new string[] { ".xci", ".xit", ".xml", ".coe", ".mem" };
                 
                 // Hariç tutulacak klasörler
                 string[] excludeDirs = new string[] { "sim", "synth", "sim_netlist" };
