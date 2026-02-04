@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -157,11 +157,25 @@ namespace Migrations {
         /// </summary>
         /// <remarks>
         /// Taşınan dosya ise taşıyıcının konumunu kullanır.
+        /// Normal dosyalar için: klasör yolu + dosya adı (targetFA ile aynı)
+        /// Klasör temsil eden dosyalar için: hedef klasör yolu (targetFA = targetLocation + name)
         /// </remarks>
         public string targetLocation {
             get {
                 if (isCarried) {
-                    return carrier.targetLocation + carrierRelativeLocation;
+                    // Taşınan dosyalar için: carrier'ın hedef konumu + göreceli klasör yolu
+                    // NOT: Bu sadece klasör yolu verir, dosya adı targetFA'da eklenir
+                    if (isRepresentingItsFolder) {
+                        return carrier.targetLocation + carrierRelativeLocation;
+                    } else {
+                        // Normal dosyalar için targetLocation = klasör yolu (dosya adı hariç)
+                        // carrierRelativeLocation zaten sadece klasör yolunu içeriyor
+                        string basePath = carrier.targetLocation;
+                        if (!string.IsNullOrEmpty(carrierRelativeLocation)) {
+                            basePath = basePath + carrierRelativeLocation;
+                        }
+                        return basePath;
+                    }
                 }
 
                 else {
@@ -175,13 +189,17 @@ namespace Migrations {
         /// </summary>
         /// <remarks>
         /// Klasör temsil ediyorsa içindeki dosya adını ekler.
+        /// Taşınan normal dosyalar için de dosya adını ekler.
         /// </remarks>
         public string targetFA {
             get {
                 if (isRepresentingItsFolder) {
                     return targetLocation + '\\' + name;
                 }
-
+                else if (isCarried) {
+                    // Taşınan normal dosyalar için: klasör yolu + dosya adı
+                    return targetLocation + '\\' + name;
+                }
                 else {
                     return targetLocation;
                 }
@@ -202,11 +220,17 @@ namespace Migrations {
                     }
 
                     else {
-                        string parentDir = Path.GetDirectoryName(carrierRelativeLocation);
-                        if (string.IsNullOrEmpty(parentDir)) {
+                        if (string.IsNullOrEmpty(carrierRelativeLocation)) {
                             return carrier.PPRRelativeLocation;
                         }
-                        return carrier.PPRRelativeLocation + parentDir.Replace('\\', '/');
+                        string rel = carrierRelativeLocation.Replace('\\', '/');
+                        if (rel.StartsWith("/")) {
+                            rel = rel.Substring(1);
+                        }
+                        if (string.IsNullOrEmpty(rel)) {
+                            return carrier.PPRRelativeLocation;
+                        }
+                        return carrier.PPRRelativeLocation + "/" + rel;
                     }
                 }
 
@@ -247,4 +271,3 @@ namespace Migrations {
 
     }
 }
-
