@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Xml;
@@ -67,6 +67,15 @@ namespace Migrations {
             }
             catch (Exception ex) {
                 Log("Warning - FindIpsFromBds failed: " + ex.Message);
+            }
+
+            try {
+                Log("Step 4.5/10: LinkXitFilesToParentIp...\n");
+                LinkXitFilesToParentIp();
+                if (doDump) sourcesDump += dumpSources("LinkXitFilesToParentIp");
+            }
+            catch (Exception ex) {
+                Log("Warning - LinkXitFilesToParentIp failed: " + ex.Message);
             }
 
             try {
@@ -269,14 +278,24 @@ namespace Migrations {
 
                 else if ((fileSetType.Equals("BlockSrcs", StringComparison.OrdinalIgnoreCase)
                     || fileSetType.Equals("DesignSrcs", StringComparison.OrdinalIgnoreCase))
+                    && Regex.IsMatch(filePath.Value, @"\.xit$", RegexOptions.IgnoreCase)) {
+                    // It is a subcore ip template file (.xit), will be carried with parent IP
+                    // XIT dosyası subcore için - ana IP klasörü altında olmalı
+                    dag.type = SourceType.IP;
+                    // NOT: Eğer bu XIT bir IP klasörü altındaysa, sonradan FindIpsFromBds veya 
+                    // başka bir fonksiyonda isCarried olarak işaretlenecek
+                }
+
+                else if ((fileSetType.Equals("BlockSrcs", StringComparison.OrdinalIgnoreCase)
+                    || fileSetType.Equals("DesignSrcs", StringComparison.OrdinalIgnoreCase))
                     && Regex.IsMatch(filePath.Value, @"\.bd$", RegexOptions.IgnoreCase)) {
                     // It is a block design file, copy its folder to /bd
                     dag.type = SourceType.BD;
                 }
 
                 else if (fileSetType.Equals("DesignSrcs", StringComparison.OrdinalIgnoreCase)
-                    && Regex.IsMatch(filePath.Value, @"\.(vhd|v)$", RegexOptions.IgnoreCase)) {
-                    // It is an hdl design file, copy it to /rtl
+                    && Regex.IsMatch(filePath.Value, @"\.(vhd|vhdl|v|sv)$", RegexOptions.IgnoreCase)) {
+                    // It is an hdl design file (VHDL, Verilog, SystemVerilog), copy it to /rtl
                     dag.type = SourceType.RTL;
                 }
 
@@ -411,13 +430,20 @@ namespace Migrations {
                     continue;
                 }
 
+                Log("Processing BD: " + dag.name);
+                Log("  Source: " + dag.sourceFA);
+
                 // BD klasörü gerçekten var mı kontrol et
                 string bdDir = Directory.GetParent(dag.sourceFA).FullName;
                 if (!Directory.Exists(bdDir)) {
-                    Log("Warning - BD directory not found: " + bdDir);
+                    Log("ERROR - BD directory not found");
+                    Log("  Expected directory: " + bdDir);
+                    Log("  BD file: " + dag.sourceFA);
                     dag.isLost = true;
                     continue;
                 }
+                
+                Log("  BD directory: " + bdDir);
 
                 List<string> newIpNames = new List<string>();
                 
@@ -500,9 +526,145 @@ namespace Migrations {
                     newSources.Add(ipDag);
                     Log("Source file is mentioned in BD (" + ipDag.type.ToString("g") + "): " + ipDag.sourceFA);
                 }
+
+                // BD klasörü altındaki diğer dosyaları (XDC, DCP vb.) bul ve işaretle
+                LinkBdSubFilesToBd(dag, bdDir);
             }
 
             sources.AddRange(newSources);
+        }
+
+        /// <summary>
+        /// BD klasörü altındaki dosyalara (XDC, DCP vb.) XPR'de ayrı referans varsa
+        /// bu dosyaları BD ile birlikte taşınacak şekilde işaretler ve XPR yollarını günceller.
+        /// </summary>
+        private void LinkBdSubFilesToBd(VDag bdDag, string bdDir) {
+            Log("  Checking for BD sub-files in: " + bdDir);
+            int linkedCount = 0;
+            
+            // BD klasörü altındaki tüm dosyaları bul (recursive)
+            // XPR'de bu dosyalara referans var mı kontrol et
+            foreach (VDag dag in sources) {
+                // Kendisini atlat
+                if (dag == bdDag || dag.isLost) {
+                    continue;
+                }
+
+                // Zaten taşınan dosyaları atlat
+                if (dag.isCarried) {
+                    continue;
+                }
+
+                // BD dosyasını temsil eden dag'ı atlat
+                if (dag.type == SourceType.BD) {
+                    continue;
+                }
+
+                // BD klasörü altında mı kontrol et
+                if (!IsSubPath(dag.sourceFA, bdDir)) {
+                    continue;
+                }
+
+                // Bu dosya BD klasörü altında - BD ile birlikte taşınacak şekilde işaretle
+                dag.isCarried = true;
+                dag.carrier = bdDag;
+                dag.isCopied = false;  // BD ile birlikte kopyalanacak, ayrıca kopyalanmayacak
+                
+                // BD klasörüne göre göreceli konum hesapla
+                // Dosya yolundan BD klasörü yolunu çıkar, sonra dosya adını çıkar (sadece klasör yolu)
+                string relativeFilePath = dag.sourceFA.Substring(bdDir.Length).TrimStart('\\', '/');
+                string relativeDir = Path.GetDirectoryName(relativeFilePath);
+                
+                // Eğer dosya doğrudan BD klasöründe ise relativeDir boş olur
+                if (string.IsNullOrEmpty(relativeDir) || relativeDir == "\\" || relativeDir == "/") {
+                    dag.carrierRelativeLocation = "";
+                } else {
+                    dag.carrierRelativeLocation = "\\" + relativeDir;
+                }
+                
+                linkedCount++;
+                Log("    Linked BD sub-file: " + dag.name);
+                Log("      Source: " + dag.sourceFA);
+                Log("      Type: " + dag.type.ToString());
+                Log("      Relative dir: " + (string.IsNullOrEmpty(dag.carrierRelativeLocation) ? "(root)" : dag.carrierRelativeLocation));
+                Log("      Target will be: " + dag.targetFA);
+            }
+            
+            if (linkedCount > 0) {
+                Log("  Total " + linkedCount + " sub-files linked to BD: " + bdDag.name);
+            }
+        }
+
+        /// <summary>
+        /// XIT dosyalarını (subcore IP template) ana IP'lere bağlar.
+        /// XIT dosyaları subcore IP'ler için Vivado tarafından oluşturulur ve 
+        /// ana IP klasörü altında bulunur.
+        /// </summary>
+        private void LinkXitFilesToParentIp() {
+            Log("Linking XIT files to parent IPs...");
+            int linkedCount = 0;
+
+            // Önce tüm XCI (ana IP) klasörlerini bul
+            List<VDag> ipDags = sources.Where(d => 
+                d.type == SourceType.IP && 
+                !d.isLost && 
+                d.sourceFA != null &&
+                d.sourceFA.EndsWith(".xci", StringComparison.OrdinalIgnoreCase)
+            ).ToList();
+
+            // XIT olarak işaretlenmiş dosyaları bul
+            foreach (VDag xitDag in sources.Where(d => 
+                d.type == SourceType.IP && 
+                !d.isLost && 
+                d.sourceFA != null &&
+                d.sourceFA.EndsWith(".xit", StringComparison.OrdinalIgnoreCase)
+            ).ToList()) {
+                
+                // Bu XIT'in ana IP'sini bul - XIT, IP klasörünün alt dizininde olmalı
+                string xitDir = Directory.GetParent(xitDag.sourceFA).FullName;
+                
+                VDag parentIp = null;
+                foreach (VDag ipDag in ipDags) {
+                    string ipDir = Directory.GetParent(ipDag.sourceFA).FullName;
+                    
+                    // XIT dosyası bu IP klasörünün altında mı?
+                    if (IsSubPath(xitDag.sourceFA, ipDir)) {
+                        parentIp = ipDag;
+                        break;
+                    }
+                }
+
+                if (parentIp != null) {
+                    // XIT'i ana IP ile taşınacak şekilde işaretle
+                    string ipDir = Directory.GetParent(parentIp.sourceFA).FullName;
+                    string relativeFilePath = xitDag.sourceFA.Substring(ipDir.Length).TrimStart('\\', '/');
+                    string relativeDir = Path.GetDirectoryName(relativeFilePath);
+                    
+                    xitDag.isCarried = true;
+                    xitDag.carrier = parentIp;
+                    xitDag.isCopied = false;  // Ana IP ile kopyalanacak
+                    
+                    if (string.IsNullOrEmpty(relativeDir) || relativeDir == "\\" || relativeDir == "/") {
+                        xitDag.carrierRelativeLocation = "";
+                    } else {
+                        xitDag.carrierRelativeLocation = "\\" + relativeDir;
+                    }
+                    
+                    linkedCount++;
+                    Log("  Linked XIT to parent IP: " + xitDag.name + " -> " + parentIp.name);
+                    Log("    XIT path: " + xitDag.sourceFA);
+                    Log("    Parent IP: " + parentIp.sourceFA);
+                    Log("    Relative location: " + (string.IsNullOrEmpty(xitDag.carrierRelativeLocation) ? "(root)" : xitDag.carrierRelativeLocation));
+                } else {
+                    // Ana IP bulunamadı - XIT'i bağımsız olarak kopyala
+                    Log("  Warning - No parent IP found for XIT: " + xitDag.name);
+                    Log("    XIT path: " + xitDag.sourceFA);
+                    // XIT dosyasını OTHER olarak değiştir - ayrı kopyalanacak
+                    xitDag.type = SourceType.OTHER;
+                }
+            }
+            
+            Log("XIT linking complete: " + linkedCount + " files linked");
         }
 
         private void FindCoesForIps() {
@@ -593,7 +755,13 @@ namespace Migrations {
                     cDag.isCopied = false;
                     cDag.isCarried = true;
                     cDag.carrier = dag;
-                    cDag.carrierRelativeLocation = cDag.copiedFA.Substring(dag.copiedFA.Length);
+                    string relativeFilePath = cDag.copiedFA.Substring(dag.copiedFA.Length).TrimStart('\\', '/');
+                    string relativeDir = Path.GetDirectoryName(relativeFilePath);
+                    if (string.IsNullOrEmpty(relativeDir) || relativeDir == "\\" || relativeDir == "/") {
+                        cDag.carrierRelativeLocation = "";
+                    } else {
+                        cDag.carrierRelativeLocation = "\\" + relativeDir;
+                    }
                 }
 
                 else {
@@ -725,9 +893,9 @@ namespace Migrations {
                     if (dag.type == SourceType.IP) {
                         CopyOnlyXci(dag.copiedFA, dag.targetLocation);
                     }
-                    // BD klasörleri için minimal kopyalama
+                    // BD klasörleri için minimal kopyalama - XDC dahil
                     else if (dag.type == SourceType.BD) {
-                        DirectoryCopyMinimal(dag.copiedFA, dag.targetLocation);
+                        DirectoryCopyMinimalForBD(dag.copiedFA, dag.targetLocation);
                     }
                     else {
                         DirectoryCopy(dag.copiedFA, dag.targetLocation);
@@ -735,6 +903,11 @@ namespace Migrations {
                 }
 
                 else {
+                    // Normal dosyalar için hedef klasörü oluştur
+                    string targetDir = Path.GetDirectoryName(dag.targetLocation);
+                    if (!string.IsNullOrEmpty(targetDir) && !Directory.Exists(targetDir)) {
+                        Directory.CreateDirectory(targetDir);
+                    }
                     File.Copy(dag.copiedFA, dag.targetLocation);
                 }
 
@@ -743,8 +916,24 @@ namespace Migrations {
             }
 
             catch (Exception e) {
-                Log("ERROR - Could not copy/unzip source: " + dag.copiedFA);
-                Log(e.Message);
+                Log("ERROR - Could not copy/unzip source");
+                Log("  File name: " + dag.name);
+                Log("  File type: " + dag.type.ToString());
+                Log("  Source path: " + dag.copiedFA);
+                Log("  Target location: " + dag.targetLocation);
+                Log("  Target file: " + dag.targetFA);
+                Log("  Is carried: " + dag.isCarried);
+                if (dag.isCarried && dag.carrier != null) {
+                    Log("  Carrier: " + dag.carrier.name);
+                    Log("  Carrier relative location: " + dag.carrierRelativeLocation);
+                }
+                Log("  Is representing folder: " + dag.isRepresentingItsFolder);
+                Log("  Is surrogate: " + dag.isSurrogate);
+                Log("  Exception type: " + e.GetType().Name);
+                Log("  Exception message: " + e.Message);
+                if (e.InnerException != null) {
+                    Log("  Inner exception: " + e.InnerException.Message);
+                }
                 dag.wasCopied = false;
                 dag.isLost = true;  // Dosya kayboldu olarak işaretle
             }
@@ -831,11 +1020,27 @@ namespace Migrations {
         /// IP ve BD klasörleri için minimal kopyalama - sadece kaynak dosyaları alır
         /// DCP, sim_netlist gibi Vivado tarafından üretilen dosyaları hariç tutar
         /// NOT: .xml dosyaları TUTULMALI - component.xml ve interface tanımları için gerekli!
+        /// NOT: BD için .xdc dosyaları TUTULMALI - BD constraint dosyaları!
         /// </summary>
         private void DirectoryCopyMinimal(string sourceDir, string destDir) {
+            DirectoryCopyMinimalInternal(sourceDir, destDir, false);
+        }
+
+        /// <summary>
+        /// BD klasörleri için minimal kopyalama - XDC dahil, DCP hariç (Vivado yeniden üretir)
+        /// </summary>
+        private void DirectoryCopyMinimalForBD(string sourceDir, string destDir) {
+            DirectoryCopyMinimalInternal(sourceDir, destDir, true);
+        }
+
+        private void DirectoryCopyMinimalInternal(string sourceDir, string destDir, bool isBD) {
             DirectoryInfo dir = new DirectoryInfo(sourceDir);
             
             if (!dir.Exists) {
+                Log("ERROR - Source directory not found for minimal copy");
+                Log("  Source: " + sourceDir);
+                Log("  Target: " + destDir);
+                Log("  Is BD: " + isBD);
                 return;
             }
 
@@ -849,7 +1054,7 @@ namespace Migrations {
                 "_wrapper.vhd",
             };
             
-            // Hariç tutulacak uzantılar
+            // Hariç tutulacak uzantılar - DCP her zaman hariç (Vivado yeniden üretir)
             string[] excludeExtensions = new string[] {
                 ".dcp",           // Design checkpoint - sentez çıktısı
                 ".hwdef",         // Hardware definition
@@ -858,7 +1063,10 @@ namespace Migrations {
             
             // Hariç tutulacak klasörler - Vivado tarafından üretilir
             // NOT: ipshared TUTULMALI - custom IP dosyaları için gerekli!
-            string[] excludeDirs = new string[] {
+            // BD için hw_handoff ve hdl klasörleri de TUTULMALI!
+            string[] excludeDirs = isBD ? new string[] {
+                "sim",            // Simülasyon çıktıları
+            } : new string[] {
                 "sim",            // Simülasyon çıktıları
                 "synth",          // Sentez çıktıları
             };
@@ -904,7 +1112,7 @@ namespace Migrations {
                 // Hariç tutulan klasörleri atla
                 if (!excludeDirs.Contains(dirIn.Name, StringComparer.OrdinalIgnoreCase)) {
                     string tempPath = Path.Combine(destDir, dirIn.Name);
-                    DirectoryCopyMinimal(dirIn.FullName, tempPath);
+                    DirectoryCopyMinimalInternal(dirIn.FullName, tempPath, isBD);
                 }
             }
         }
@@ -922,10 +1130,11 @@ namespace Migrations {
 
             Directory.CreateDirectory(destDir);
             
-            // XCI ve COE dosyalarını kopyala
+            // XCI, XIT, XML, COE ve MEM dosyalarını kopyala
+            // XML dosyaları kritik - IP configuration ve component tanımları için gerekli
             foreach (FileInfo file in dir.GetFiles()) {
                 string ext = file.Extension.ToLowerInvariant();
-                if (ext == ".xci" || ext == ".coe" || ext == ".mem") {
+                if (ext == ".xci" || ext == ".xit" || ext == ".xml" || ext == ".coe" || ext == ".mem") {
                     string targetPath = Path.Combine(destDir, file.Name);
                     try {
                         file.CopyTo(targetPath);
@@ -949,25 +1158,33 @@ namespace Migrations {
         }
         
         /// <summary>
-        /// Alt klasörlerde COE dosyalarını recursive kopyala
+        /// Alt klasörlerde XCI, COE ve MEM dosyalarını recursive kopyala
+        /// Subcore IP'lerin XCI dosyaları da dahil!
         /// </summary>
         private void CopyOnlyXciRecursive(string sourceDir, string destDir) {
             DirectoryInfo dir = new DirectoryInfo(sourceDir);
             if (!dir.Exists) return;
             
-            bool hasCoeMem = false;
+            bool hasFiles = false;
             foreach (FileInfo file in dir.GetFiles()) {
                 string ext = file.Extension.ToLowerInvariant();
-                if (ext == ".coe" || ext == ".mem") {
-                    if (!hasCoeMem) {
+                // XCI (subcore), XIT, XML, COE ve MEM dosyalarını kopyala
+                // XML dosyaları subcore için de gerekli olabilir
+                if (ext == ".xci" || ext == ".xit" || ext == ".xml" || ext == ".coe" || ext == ".mem") {
+                    if (!hasFiles) {
                         Directory.CreateDirectory(destDir);
-                        hasCoeMem = true;
+                        hasFiles = true;
                     }
                     try {
-                        file.CopyTo(Path.Combine(destDir, file.Name));
-                        Log("Copied " + ext.ToUpper().Substring(1) + " from subdir: " + file.Name);
+                        string targetPath = Path.Combine(destDir, file.Name);
+                        if (!File.Exists(targetPath)) {
+                            file.CopyTo(targetPath);
+                            Log("Copied " + ext.ToUpper().Substring(1) + " (subcore): " + file.Name);
+                        }
                     }
-                    catch { }
+                    catch (Exception ex) {
+                        Log("Warning - Could not copy subcore file: " + file.Name + " - " + ex.Message);
+                    }
                 }
             }
             
@@ -990,24 +1207,33 @@ namespace Migrations {
                     continue;
                 }
 
-                XmlDocument xciDoc;
-                xciDoc = new XmlDocument();
-                xciDoc.PreserveWhitespace = true;
-                xciDoc.Load(dag.targetFA);
-                XmlNamespaceManager manager = new XmlNamespaceManager(new NameTable());
-                manager.AddNamespace("spirit", "http://www.spiritconsortium.org/XMLSchema/SPIRIT/1685-2009");
-                XmlNode node;
+                try {
+                    XmlDocument xciDoc;
+                    xciDoc = new XmlDocument();
+                    xciDoc.PreserveWhitespace = true;
+                    xciDoc.Load(dag.targetFA);
+                    XmlNamespaceManager manager = new XmlNamespaceManager(new NameTable());
+                    manager.AddNamespace("spirit", "http://www.spiritconsortium.org/XMLSchema/SPIRIT/1685-2009");
+                    XmlNode node;
 
-                // Update xci to disable core container, if enabled
-                node = xciDoc.SelectSingleNode("//spirit:configurableElementValue[@spirit:referenceId='RUNTIME_PARAM.CORECONTAINER']", manager);
+                    // Update xci to disable core container, if enabled
+                    node = xciDoc.SelectSingleNode("//spirit:configurableElementValue[@spirit:referenceId='RUNTIME_PARAM.CORECONTAINER']", manager);
 
-                if (node != null) {
-                    XmlNode parentNode = node.ParentNode;
-                    parentNode.RemoveChild(node);
-                    Log("Removed core container configuration from ip: " + dag.name);
-                    using (XmlWriter writer = XmlWriter.Create(dag.targetFA)) {
-                        xciDoc.WriteTo(writer);
+                    if (node != null) {
+                        XmlNode parentNode = node.ParentNode;
+                        parentNode.RemoveChild(node);
+                        Log("Removed core container configuration from ip: " + dag.name);
+                        using (XmlWriter writer = XmlWriter.Create(dag.targetFA)) {
+                            xciDoc.WriteTo(writer);
+                        }
                     }
+                }
+                catch (Exception ex) {
+                    Log("WARNING - Could not process IP file for core container update");
+                    Log("  IP file: " + dag.targetFA);
+                    Log("  IP name: " + dag.name);
+                    Log("  Exception type: " + ex.GetType().Name);
+                    Log("  Exception message: " + ex.Message);
                 }
             }
 
@@ -1023,92 +1249,121 @@ namespace Migrations {
                         continue;
                     }
 
-                    XmlDocument xciDoc;
-                    xciDoc = new XmlDocument();
-                    xciDoc.PreserveWhitespace = true;
-                    xciDoc.Load(dag.targetFA);
-                    XmlNamespaceManager manager = new XmlNamespaceManager(new NameTable());
-                    manager.AddNamespace("spirit", "http://www.spiritconsortium.org/XMLSchema/SPIRIT/1685-2009");
-                    XmlNode node;
+                    try {
+                        XmlDocument xciDoc;
+                        xciDoc = new XmlDocument();
+                        xciDoc.PreserveWhitespace = true;
+                        xciDoc.Load(dag.targetFA);
+                        XmlNamespaceManager manager = new XmlNamespaceManager(new NameTable());
+                        manager.AddNamespace("spirit", "http://www.spiritconsortium.org/XMLSchema/SPIRIT/1685-2009");
+                        XmlNode node;
 
-                    node = xciDoc.SelectSingleNode("//spirit:configurableElementValue[@spirit:referenceId='PARAM_VALUE.Coe_File']", manager);
+                        node = xciDoc.SelectSingleNode("//spirit:configurableElementValue[@spirit:referenceId='PARAM_VALUE.Coe_File']", manager);
 
-                    if (node == null) {
-                        node = xciDoc.SelectSingleNode("//spirit:configurableElementValue[@spirit:referenceId='PARAM_VALUE.MemInitFile']", manager);
+                        if (node == null) {
+                            node = xciDoc.SelectSingleNode("//spirit:configurableElementValue[@spirit:referenceId='PARAM_VALUE.MemInitFile']", manager);
+                        }
+
+                        if (node == null) {
+                            continue;
+                        }
+
+                        // node.FirstChild null olabilir
+                        if (node.FirstChild == null) {
+                            continue;
+                        }
+
+                        node.FirstChild.Value = RelativizePath(cDag.targetFA, dag.targetLocation).Replace('\\', '/'); 
+
+                        using (XmlWriter writer = XmlWriter.Create(dag.targetFA)) {
+                            xciDoc.WriteTo(writer);
+                        }
+
+                        Log("Changed relative location for coe - in xci: " + cDag.name + " - " + dag.name);
+
+                        string xmlFile = dag.targetFA.Substring(0, dag.targetFA.Length - 4) + ".xml";
+
+                        if (!File.Exists(xmlFile)) {
+                            continue;
+                        }
+
+                        XmlDocument xmlDoc;
+                        xmlDoc = new XmlDocument();
+                        xmlDoc.PreserveWhitespace = true;
+                        xmlDoc.Load(xmlFile);
+
+                        node = xmlDoc.SelectSingleNode("//spirit:value[@spirit:id='PARAM_VALUE.Coe_File']", manager);
+
+                        if (node == null) {
+                            node = xmlDoc.SelectSingleNode("//spirit:value[@spirit:id='PARAM_VALUE.MemInitFile']", manager);
+                        }
+
+                        if (node == null) {
+                            continue;
+                        }
+
+                        // node.FirstChild null olabilir
+                        if (node.FirstChild == null) {
+                            continue;
+                        }
+
+                        node.FirstChild.Value = RelativizePath(cDag.targetFA, dag.targetLocation).Replace('\\', '/');
+
+                        using (XmlWriter writer = XmlWriter.Create(xmlFile))
+                        {
+                            xmlDoc.WriteTo(writer);
+                        }
+
+                        Log("Changed relative location for coe - in xml: " + cDag.name + " - " + dag.name);
                     }
-
-                    if (node == null) {
-                        continue;
+                    catch (Exception ex) {
+                        Log("WARNING - Could not update COE reference in IP");
+                        Log("  IP file: " + dag.targetFA);
+                        Log("  IP name: " + dag.name);
+                        Log("  COE file: " + cDag.name);
+                        Log("  Exception type: " + ex.GetType().Name);
+                        Log("  Exception message: " + ex.Message);
                     }
-
-                    // node.FirstChild null olabilir
-                    if (node.FirstChild == null) {
-                        continue;
-                    }
-
-                    node.FirstChild.Value = RelativizePath(cDag.targetFA, dag.targetLocation).Replace('\\', '/'); 
-
-                    using (XmlWriter writer = XmlWriter.Create(dag.targetFA)) {
-                        xciDoc.WriteTo(writer);
-                    }
-
-                    Log("Changed relative location for coe - in xci: " + cDag.name + " - " + dag.name);
-
-                    string xmlFile = dag.targetFA.Substring(0, dag.targetFA.Length - 4) + ".xml";
-
-                    if (!File.Exists(xmlFile)) {
-                        continue;
-                    }
-
-                    XmlDocument xmlDoc;
-                    xmlDoc = new XmlDocument();
-                    xmlDoc.PreserveWhitespace = true;
-                    xmlDoc.Load(xmlFile);
-
-                    node = xmlDoc.SelectSingleNode("//spirit:value[@spirit:id='PARAM_VALUE.Coe_File']", manager);
-
-                    if (node == null) {
-                        node = xmlDoc.SelectSingleNode("//spirit:value[@spirit:id='PARAM_VALUE.MemInitFile']", manager);
-                    }
-
-                    if (node == null) {
-                        continue;
-                    }
-
-                    // node.FirstChild null olabilir
-                    if (node.FirstChild == null) {
-                        continue;
-                    }
-
-                    node.FirstChild.Value = RelativizePath(cDag.targetFA, dag.targetLocation).Replace('\\', '/');
-
-                    using (XmlWriter writer = XmlWriter.Create(xmlFile))
-                    {
-                        xmlDoc.WriteTo(writer);
-                    }
-
-                    Log("Changed relative location for coe - in xml: " + cDag.name + " - " + dag.name);
                 }
             }
 
             // Update the related part in the xpr file
+            Log("Updating XPR file paths...");
+            int updatedCount = 0;
+            int removedCount = 0;
+            
             foreach (VDag dag in sources.Where(delegate (VDag dag) {
                 return dag.fileNode != null;
             })) {
                 if (dag.isLost && dag.fileNode.ParentNode is object) {
                     dag.fileNode.ParentNode.RemoveChild(dag.fileNode);
                     warnings.Add(dag.name + " is not found, see above logs for its address");
+                    removedCount++;
+                    Log("  Removed lost file from XPR: " + dag.name);
 
                 }
 
                 else if (dag.isSurrogate) {
-                    dag.fileNode.Attributes["Path"].Value = dag.PPRRelativeFA;
+                    string newPath = dag.PPRRelativeFA;
+                    dag.fileNode.Attributes["Path"].Value = newPath;
+                    updatedCount++;
+                    Log("  Updated surrogate path: " + dag.name + " -> " + newPath);
                 }
 
                 else if (!dag.hasSurrogate) {
-                    dag.fileNode.Attributes["Path"].Value = dag.PPRRelativeFA;
+                    string newPath = dag.PPRRelativeFA;
+                    string oldPath = dag.fileNode.Attributes["Path"].Value;
+                    dag.fileNode.Attributes["Path"].Value = newPath;
+                    updatedCount++;
+                    if (dag.isCarried) {
+                        Log("  Updated carried file path: " + dag.name);
+                        Log("    Old: " + oldPath);
+                        Log("    New: " + newPath);
+                    }
                 }
             }
+            
+            Log("XPR update complete: " + updatedCount + " paths updated, " + removedCount + " lost files removed");
         }
 
 
